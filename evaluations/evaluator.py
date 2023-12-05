@@ -7,6 +7,7 @@ import zipfile
 from abc import ABC, abstractmethod
 from contextlib import contextmanager
 from functools import partial
+from pathlib import Path
 from multiprocessing import cpu_count
 from multiprocessing.pool import ThreadPool
 from typing import Iterable, Optional, Tuple
@@ -26,9 +27,16 @@ FID_SPATIAL_NAME = "mixed_6/conv:0"
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("ref_batch", help="path to reference batch npz file")
-    parser.add_argument("sample_batch", help="path to sample batch npz file")
+    # parser.add_argument("ref_batch", help="path to reference batch npz file")
+    # parser.add_argument("-sample_batch", help="path to sample batch npz file", default=None)
+    parser.add_argument(
+        "batch",
+         nargs='*', 
+         help="path to reference batch npz file, followed by path to samples unless computing stats",
+    )
     args = parser.parse_args()
+    args.ref_batch = args.batch[0]
+    args.sample_batch = args.batch[1] if len(args.batch) > 1 else None
 
     config = tf.ConfigProto(
         allow_soft_placement=True  # allows DecodeJpeg to run on CPU in Inception graph
@@ -45,6 +53,25 @@ def main():
     ref_acts = evaluator.read_activations(args.ref_batch)
     print("computing/reading reference batch statistics...")
     ref_stats, ref_stats_spatial = evaluator.read_statistics(args.ref_batch, ref_acts)
+
+    if args.sample_batch is None:
+        print("No sample batch provided. Will save dataset statistics and exit.")
+        obj = {}
+        # only retain 10,000 images for computing precision/recall with
+        arr_0 = np.load(args.ref_batch)['arr_0']
+        retain_indices = np.random.choice(len(arr_0), min(10000, len(arr_0)), replace=False)
+        obj['arr_0'] = arr_0[retain_indices]
+        del arr_0
+        # and then collect FID stuff
+        obj['mu'] = ref_stats.mu
+        obj['sigma'] = ref_stats.sigma
+        obj['mu_s'] = ref_stats_spatial.mu
+        obj['sigma_s'] = ref_stats_spatial.sigma
+        ref_batch_path = Path(args.ref_batch)
+        virtual_ref_batch_path = ref_batch_path.parent / ('VIRTUAL_' + ref_batch_path.stem + '.npz')
+        print(f'Saving dataset file with shapes like {obj["arr_0"].shape} and {obj["mu"].shape} to {virtual_ref_batch_path}')
+        np.savez(virtual_ref_batch_path, **obj)
+        exit()
 
     print("computing sample batch activations...")
     sample_acts = evaluator.read_activations(args.sample_batch)
